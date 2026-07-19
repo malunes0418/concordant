@@ -317,8 +317,9 @@ Releases are published from GitHub Actions via [NuGet Trusted Publishing](https:
    - **Repository Owner:** `malunes0418`
    - **Repository:** `concordant`
    - **Workflow File:** `publish.yml` (filename only; corresponds to `.github/workflows/publish.yml`)
-   - **Environment:** leave empty (this workflow does not use a GitHub Environment)
-2. Publish a [GitHub Release](https://github.com/malunes0418/concordant/releases), or run the **publish** workflow via **Actions > publish > Run workflow**.
+   - **Environment:** `nuget` (must match the GitHub Environment name below)
+2. Create a GitHub Environment named **nuget** under [Settings -> Environments](https://github.com/malunes0418/concordant/settings/environments) (protection rules can be empty). The `publish` job sets `environment: nuget` so the OIDC token matches the nuget.org policy.
+3. Publish a [GitHub Release](https://github.com/malunes0418/concordant/releases), or run the **publish** workflow via **Actions > publish > Run workflow**.
 
 Don't forget to give the project a star! Thanks again!
 
