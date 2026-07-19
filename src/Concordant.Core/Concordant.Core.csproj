@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>Concordant</RootNamespace>
+    <AssemblyName>Concordant.Core</AssemblyName>
+    <Description>Correctness-first Concordant CRDT document kernel for .NET 8 and .NET 10.</Description>
+    <PackageId>Concordant.Core</PackageId>
+    <PackageTags>concordant;crdt;collaboration;offline;sync;yata</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Experimental sync codec boundary is intentional for pre-1.0. -->
+    <NoWarn>$(NoWarn);CNCR001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Concordant.Core.Tests" />
+    <InternalsVisibleTo Include="Concordant.Fuzz.Tests" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CI)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

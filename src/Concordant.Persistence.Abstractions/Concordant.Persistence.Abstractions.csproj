@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>Concordant.Persistence</RootNamespace>
+    <AssemblyName>Concordant.Persistence.Abstractions</AssemblyName>
+    <Description>Transport-agnostic append-log and checkpoint abstractions for Concordant.Core.</Description>
+    <PackageId>Concordant.Persistence.Abstractions</PackageId>
+    <PackageTags>concordant;crdt;persistence;checkpoint;append-log</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CI)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

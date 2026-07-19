@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Concordant.Benchmarks/Concordant.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Concordant.Quickstart/Concordant.Quickstart.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Concordant.Core/Concordant.Core.csproj" />
+    <Project Path="src/Concordant.Persistence.Abstractions/Concordant.Persistence.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Concordant.Core.Tests/Concordant.Core.Tests.csproj" />
+    <Project Path="tests/Concordant.Fuzz.Tests/Concordant.Fuzz.Tests.csproj" />
+    <Project Path="tests/Concordant.Model.Tests/Concordant.Model.Tests.csproj" />
+    <Project Path="tests/Concordant.Persistence.Abstractions.Tests/Concordant.Persistence.Abstractions.Tests.csproj" />
+  </Folder>
+</Solution>

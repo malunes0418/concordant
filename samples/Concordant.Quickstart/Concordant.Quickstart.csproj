@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Concordant.Quickstart</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Concordant.Core\Concordant.Core.csproj" />
+    <ProjectReference Include="..\..\src\Concordant.Persistence.Abstractions\Concordant.Persistence.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

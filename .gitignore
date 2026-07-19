@@ -1,0 +1,31 @@
+## Build
+bin/
+obj/
+out/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+*.DotSettings.user
+
+## Test / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+
+## OS / tooling
+.DS_Store
+Thumbs.db
+*.log
+BenchmarkDotNet.Artifacts/

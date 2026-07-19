@@ -1,0 +1,38 @@
+{
+  "Seed": 1,
+  "ReplicaCount": 2,
+  "Commits": [
+    {
+      "Replica": 0,
+      "Ops": [
+        { "Kind": "RootDeclare", "Name": "text", "RootKind": "Text" },
+        { "Kind": "RootDeclare", "Name": "m", "RootKind": "Map" }
+      ]
+    },
+    {
+      "Replica": 0,
+      "Ops": [
+        { "Kind": "Insert", "Container": "text", "Text": "H" }
+      ]
+    },
+    {
+      "Replica": 1,
+      "Ops": [
+        { "Kind": "Insert", "Container": "text", "Text": "i" }
+      ]
+    },
+    {
+      "Replica": 0,
+      "Ops": [
+        { "Kind": "MapSet", "Map": "m", "Key": "title", "Text": "hello" }
+      ]
+    },
+    {
+      "Replica": 1,
+      "Ops": [
+        { "Kind": "MapSet", "Map": "m", "Key": "title", "Text": "world" }
+      ]
+    }
+  ],
+  "ExpectedFingerprint": "text=iH|roots=m:Map.;text:Text.;|maps=m{title=s:world;}|ops=4522700C3989AA32AEDFD88034D00BD3@1;A6EAF652BA3F2E1DEF87911317EB261A@1;4522700C3989AA32AEDFD88034D00BD3@2;A6EAF652BA3F2E1DEF87911317EB261A@2;A6EAF652BA3F2E1DEF87911317EB261A@3;A6EAF652BA3F2E1DEF87911317EB261A@4;"
+}
