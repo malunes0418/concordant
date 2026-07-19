@@ -1,0 +1,21 @@
+# Normalize text files to LF in the working tree and in the repository.
+# Keeps Windows checkouts aligned with .editorconfig end_of_line = lf
+# and dotnet format ENDOFLINE enforcement.
+* text=auto eol=lf
+
+# Explicit binary types (avoid accidental conversion)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.nupkg binary
+*.snupkg binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.wasm binary
+*.hex binary
