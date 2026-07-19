@@ -1,4 +1,4 @@
-﻿<a id="readme-top"></a>
+<a id="readme-top"></a>
 
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
@@ -306,6 +306,19 @@ Issues and pull requests are welcome while the project is in early beta. Prefer 
 4. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 5. Push to the Branch (`git push origin feature/AmazingFeature`)
 6. Open a Pull Request
+
+
+### Publishing to NuGet.org
+
+Releases are published from GitHub Actions via [NuGet Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing) (no long-lived API keys in the repo).
+
+1. On [nuget.org](https://www.nuget.org/) as user **bmalunes**, open **Trusted Publishing** and create a policy with:
+   - **Owner:** you (`bmalunes`), or the org that owns the packages
+   - **Repository Owner:** `malunes0418`
+   - **Repository:** `concordant`
+   - **Workflow File:** `publish.yml` (filename only; corresponds to `.github/workflows/publish.yml`)
+   - **Environment:** leave empty (this workflow does not use a GitHub Environment)
+2. Publish a [GitHub Release](https://github.com/malunes0418/concordant/releases), or run the **publish** workflow via **Actions > publish > Run workflow**.
 
 Don't forget to give the project a star! Thanks again!
 

@@ -1,0 +1,58 @@
+name: publish
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          global-json-file: global.json
+
+      - name: Pack
+        run: dotnet pack Concordant.slnx -c Release -o artifacts
+
+      - name: NuGet login (OIDC)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: bmalunes
+
+      - name: Push to NuGet.org
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          nupkgs=(artifacts/Concordant.*.nupkg)
+          if [ ${#nupkgs[@]} -eq 0 ]; then
+            echo "No Concordant.*.nupkg files found under artifacts/"
+            exit 1
+          fi
+          dotnet nuget push "artifacts/Concordant.*.nupkg" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          snupkgs=(artifacts/Concordant.*.snupkg)
+          if [ ${#snupkgs[@]} -gt 0 ]; then
+            dotnet nuget push "artifacts/Concordant.*.snupkg" \
+              --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          fi
