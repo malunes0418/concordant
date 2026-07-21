@@ -287,6 +287,38 @@ public sealed class UndoManagerTests
         Assert.Equal(UndoStatus.Empty, undo.Redo().Status);
     }
 
+    [Fact]
+    public void Failed_local_transaction_does_not_push_undo_stack()
+    {
+        using var limited = new ConcordantDocument(new ConcordantDocumentOptions
+        {
+            WriterSession = SessionId.FromSeed(21),
+            MaxContentUtf16Length = 3,
+        });
+        using UndoManager limitedUndo = NewUndo(limited);
+        int stackBefore = limitedUndo.UndoStackCount;
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            limited.Transact(tx =>
+            {
+                SharedMap map = tx.GetOrCreateMap("m");
+                map.Set("a", ConcordantScalar.String("ok"));
+                map.Set("b", ConcordantScalar.String("fail"));
+            });
+        });
+
+        Assert.Equal(stackBefore, limitedUndo.UndoStackCount);
+        Assert.Null(limited.TryGetRootKind("m"));
+        Assert.False(limitedUndo.CanUndo);
+
+        // Successful retry is undoable.
+        limited.Transact(tx => tx.GetOrCreateText("t").Insert(0, "ok"));
+        Assert.True(limitedUndo.CanUndo);
+        Assert.Equal(UndoStatus.Applied, limitedUndo.Undo().Status);
+        Assert.Equal(string.Empty, limited.GetText("t").ToString());
+    }
+
     private static OpId FindNestedTextId(ConcordantDocument doc, OpId mapId)
     {
         foreach (KeyValuePair<string, ConcordantContent> kv in doc.Store.VisibleMap(ContainerRef.Nested(mapId)))

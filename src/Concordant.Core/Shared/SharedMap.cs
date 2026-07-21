@@ -4,7 +4,16 @@ using Concordant.Values;
 
 namespace Concordant.Shared;
 
-/// <summary>Typed view over a map container (root or nested).</summary>
+/// <summary>
+/// Typed view over a map container (root or nested).
+/// <para>
+/// Beta map semantics are last-writer-wins assignment history only. Keys cannot be removed:
+/// there is no <c>MapDelete</c> / remove API in this release because a removal marker would require
+/// a native-v1 wire change. Overwrite with a new <see cref="Set"/> value (including
+/// <see cref="ConcordantScalar.Null"/>) if you need to clear a logical value; the prior assignment
+/// remains in history and continues to occupy retention quotas.
+/// </para>
+/// </summary>
 public sealed class SharedMap
 {
     private readonly ConcordantDocument _document;

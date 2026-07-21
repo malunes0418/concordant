@@ -17,15 +17,17 @@ internal sealed class DocumentStore
     private readonly Dictionary<OpId, ConcordantOperation> _ops = new();
     private readonly Dictionary<SessionId, ulong> _frontier = new();
     private readonly Dictionary<SessionId, ulong> _sessionLamport = new();
-    private readonly List<ConcordantOperation> _pending = new();
+    private readonly PendingIndex _pending = new();
     private long _pendingBytes;
 
     private readonly Dictionary<string, RootState> _roots = new(StringComparer.Ordinal);
     private readonly Dictionary<OpId, NestedState> _nested = new();
     private readonly Dictionary<(ContainerRef Map, string Key), List<MapAssignment>> _maps = new();
     private readonly Dictionary<ContainerRef, YataSequence> _sequences = new();
+    private readonly Dictionary<OpId, ContainerRef> _seqItemOwner = new();
 
     private Action<ConcordantWarning>? _activeWarningSink;
+    private StoreSnapshot? _transactionSnapshot;
 
     private sealed class RootState
     {
@@ -48,6 +50,20 @@ internal sealed class DocumentStore
         public required ConcordantContent Value { get; init; }
     }
 
+    private sealed class StoreSnapshot
+    {
+        public required Dictionary<OpId, ConcordantOperation> Ops { get; init; }
+        public required Dictionary<SessionId, ulong> Frontier { get; init; }
+        public required Dictionary<SessionId, ulong> SessionLamport { get; init; }
+        public required PendingIndex Pending { get; init; }
+        public required long PendingBytes { get; init; }
+        public required Dictionary<string, RootState> Roots { get; init; }
+        public required Dictionary<OpId, NestedState> Nested { get; init; }
+        public required Dictionary<(ContainerRef Map, string Key), List<MapAssignment>> Maps { get; init; }
+        public required Dictionary<ContainerRef, YataSequence> Sequences { get; init; }
+        public required Dictionary<OpId, ContainerRef> SeqItemOwner { get; init; }
+    }
+
     public DocumentStore(ConcordantDocumentOptions options)
     {
         _options = options;
@@ -61,6 +77,35 @@ internal sealed class DocumentStore
     public int PendingCount => _pending.Count;
 
     public bool IsEmpty => _ops.Count == 0 && _pending.Count == 0;
+
+    /// <summary>Begins a local transaction checkpoint for all-or-nothing commit semantics.</summary>
+    public void BeginLocalTransaction()
+    {
+        if (_transactionSnapshot is not null)
+        {
+            throw new InvalidOperationException("A local transaction checkpoint is already active.");
+        }
+
+        _transactionSnapshot = CaptureSnapshot();
+    }
+
+    /// <summary>Commits the active local transaction checkpoint (discards the rollback image).</summary>
+    public void CommitLocalTransaction()
+    {
+        _transactionSnapshot = null;
+    }
+
+    /// <summary>Rolls back document state to the active local transaction checkpoint.</summary>
+    public void RollbackLocalTransaction()
+    {
+        if (_transactionSnapshot is null)
+        {
+            return;
+        }
+
+        RestoreSnapshot(_transactionSnapshot);
+        _transactionSnapshot = null;
+    }
 
     /// <summary>All integrated operations in deterministic OpId order.</summary>
     public IReadOnlyList<ConcordantOperation> GetIntegratedOperations()
@@ -108,19 +153,25 @@ internal sealed class DocumentStore
         }
 
         var ranges = new List<MissingClockRange>();
-        foreach (IGrouping<SessionId, ConcordantOperation> group in _pending.GroupBy(o => o.Id.Session))
+        foreach (SessionId session in _pending.Sessions)
         {
-            ulong frontier = _frontier.TryGetValue(group.Key, out ulong n) ? n : 0UL;
-            ulong minPending = group.Min(o => o.Id.Clock);
+            if (!_pending.TryGetSessionMinClock(session, out ulong minPending))
+            {
+                continue;
+            }
+
+            ulong frontier = _frontier.TryGetValue(session, out ulong n) ? n : 0UL;
             if (minPending > frontier + 1)
             {
-                ranges.Add(new MissingClockRange(group.Key, frontier + 1, minPending - 1));
+                ranges.Add(new MissingClockRange(session, frontier + 1, minPending - 1));
             }
         }
 
-        foreach (ConcordantOperation op in _pending)
+        foreach (ConcordantOperation op in _pending.Operations)
         {
-            if (op.LamportSource is OpId src && !_ops.ContainsKey(src) && !_pending.Any(p => p.Id == src))
+            if (op.LamportSource is OpId src
+                && !_ops.ContainsKey(src)
+                && !_pending.Contains(src))
             {
                 ranges.Add(new MissingClockRange(src.Session, src.Clock, src.Clock));
             }
@@ -201,9 +252,8 @@ internal sealed class DocumentStore
                 continue;
             }
 
-            if (_pending.Any(p => p.Id == op.Id))
+            if (_pending.TryGet(op.Id, out ConcordantOperation pendingOp))
             {
-                ConcordantOperation pendingOp = _pending.First(p => p.Id == op.Id);
                 if (!OperationEquality.AreEqual(pendingOp, op))
                 {
                     return ApplyResult.Rejected(
@@ -220,7 +270,6 @@ internal sealed class DocumentStore
 
         if (staged.Count == 0)
         {
-            // Dedupe against integrated/pending — normalize pending while we are here.
             _ = NormalizePending();
             return ApplyResult.Duplicate(SnapshotStateVector());
         }
@@ -277,16 +326,38 @@ internal sealed class DocumentStore
             return AttachStateVector(quotaReject!);
         }
 
+        // Snapshot so a deferred retention-quota failure cannot leave partial integrations
+        // or permanently pending quota-blocked ops. Inside an active local transaction the
+        // outer transaction checkpoint already covers rollback.
+        StoreSnapshot? applySnapshot = _transactionSnapshot is null ? CaptureSnapshot() : null;
+
         foreach (ConcordantOperation op in staged)
         {
             _pending.Add(op);
             _pendingBytes += EstimateBytes(op);
         }
 
-        IntegratePending();
+        if (!IntegratePending(out string? integrateError))
+        {
+            if (applySnapshot is not null)
+            {
+                RestoreSnapshot(applySnapshot);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    integrateError ?? "Retention quota exceeded during integration.");
+            }
+
+            return ApplyResult.Rejected(
+                integrateError ?? "Retention quota exceeded during integration.",
+                ApplyRejectReason.QuotaExceeded,
+                SnapshotStateVector(),
+                retryable: true);
+        }
 
         bool anyIntegrated = staged.Any(o => _ops.ContainsKey(o.Id));
-        bool anyPending = staged.Any(o => !_ops.ContainsKey(o.Id));
+        bool anyPending = staged.Any(o => _pending.Contains(o.Id));
         if (anyPending && !anyIntegrated)
         {
             return ApplyResult.Pending(
@@ -301,12 +372,42 @@ internal sealed class DocumentStore
     /// <summary>
     /// Always-safe pending compaction. Never removes tombstones or integrated history.
     /// </summary>
-    public int NormalizePending() =>
-        AlwaysSafeNormalizer.CompactPending(_pending, _ops, ref _pendingBytes, EstimateBytes);
+    public int NormalizePending()
+    {
+        int removed = 0;
+        List<OpId>? toRemove = null;
+        foreach (ConcordantOperation op in _pending.Operations)
+        {
+            if (!_ops.ContainsKey(op.Id))
+            {
+                continue;
+            }
+
+            toRemove ??= new List<OpId>();
+            toRemove.Add(op.Id);
+        }
+
+        if (toRemove is null)
+        {
+            return 0;
+        }
+
+        foreach (OpId id in toRemove)
+        {
+            if (_pending.Remove(id, out ConcordantOperation op))
+            {
+                _pendingBytes -= EstimateBytes(op);
+                removed++;
+            }
+        }
+
+        return removed;
+    }
 
     /// <summary>
     /// Preflight quotas that would otherwise fail during integrate.
     /// Rejects atomically before pending mutation.
+    /// Retention quotas are always budgeted so ops cannot stick permanently pending.
     /// </summary>
     private bool TryPreflightRetentionQuotas(List<ConcordantOperation> staged, out ApplyResult? reject)
     {
@@ -336,33 +437,72 @@ internal sealed class DocumentStore
             }
         }
 
-        // When the head is immediately integrable, budget the full staged chain.
-        if (staged.Any(CanIntegrate))
+        // Budget eventual integration of every pending + staged op, including clocks that must
+        // appear to fill gaps before a pending head can integrate. This prevents ops from sticking
+        // permanently pending after MaxOperations / MaxHistoricalSessions.
+        int missingGapOps = CountMissingGapOperations(staged);
+        if (_ops.Count + _pending.Count + staged.Count + missingGapOps > _options.MaxOperations)
         {
-            if (_ops.Count + staged.Count > _options.MaxOperations)
-            {
-                reject = ApplyResult.Rejected(
-                    "MaxOperations exceeded.",
-                    ApplyRejectReason.QuotaExceeded,
-                    retryable: true);
-                return false;
-            }
+            reject = ApplyResult.Rejected(
+                "MaxOperations exceeded.",
+                ApplyRejectReason.QuotaExceeded,
+                retryable: true);
+            return false;
+        }
 
-            int newSessions = staged
-                .Select(o => o.Id.Session)
-                .Distinct()
-                .Count(s => !_frontier.ContainsKey(s));
-            if (_frontier.Count + newSessions > _options.MaxHistoricalSessions)
-            {
-                reject = ApplyResult.Rejected(
-                    "MaxHistoricalSessions exceeded.",
-                    ApplyRejectReason.QuotaExceeded,
-                    retryable: true);
-                return false;
-            }
+        var sessions = new HashSet<SessionId>(_frontier.Keys);
+        foreach (SessionId session in _pending.Sessions)
+        {
+            _ = sessions.Add(session);
+        }
+
+        foreach (ConcordantOperation op in staged)
+        {
+            _ = sessions.Add(op.Id.Session);
+        }
+
+        if (sessions.Count > _options.MaxHistoricalSessions)
+        {
+            reject = ApplyResult.Rejected(
+                "MaxHistoricalSessions exceeded.",
+                ApplyRejectReason.QuotaExceeded,
+                retryable: true);
+            return false;
         }
 
         return true;
+    }
+
+    private int CountMissingGapOperations(List<ConcordantOperation> staged)
+    {
+        var minPending = new Dictionary<SessionId, ulong>();
+        foreach (SessionId session in _pending.Sessions)
+        {
+            if (_pending.TryGetSessionMinClock(session, out ulong min))
+            {
+                minPending[session] = min;
+            }
+        }
+
+        foreach (ConcordantOperation op in staged)
+        {
+            if (!minPending.TryGetValue(op.Id.Session, out ulong existing) || op.Id.Clock < existing)
+            {
+                minPending[op.Id.Session] = op.Id.Clock;
+            }
+        }
+
+        int missing = 0;
+        foreach (KeyValuePair<SessionId, ulong> entry in minPending)
+        {
+            ulong frontier = _frontier.TryGetValue(entry.Key, out ulong n) ? n : 0UL;
+            if (entry.Value > frontier + 1)
+            {
+                missing += (int)(entry.Value - frontier - 1);
+            }
+        }
+
+        return missing;
     }
 
     private ApplyResult AttachStateVector(ApplyResult result) =>
@@ -419,14 +559,13 @@ internal sealed class DocumentStore
     /// <summary>Looks up a sequence item (including tombstones) and its container.</summary>
     public bool TryGetSeqItem(OpId id, out ContainerRef container, out SeqItem item)
     {
-        foreach (KeyValuePair<ContainerRef, YataSequence> entry in _sequences)
+        if (_seqItemOwner.TryGetValue(id, out ContainerRef owner)
+            && _sequences.TryGetValue(owner, out YataSequence? seq)
+            && seq.TryGetNode(id, out LinkedListNode<SeqItem> node))
         {
-            if (entry.Value.TryGetNode(id, out LinkedListNode<SeqItem> node))
-            {
-                container = entry.Key;
-                item = node.Value;
-                return true;
-            }
+            container = owner;
+            item = node.Value;
+            return true;
         }
 
         container = default;
@@ -501,20 +640,7 @@ internal sealed class DocumentStore
             return string.Empty;
         }
 
-        var sb = new StringBuilder();
-        foreach (SeqItem item in seq.VisibleItems())
-        {
-            if (item.Content is ConcordantContent.ScalarContent { Value: ConcordantScalar.StringScalar s })
-            {
-                sb.Append(s.Value);
-            }
-            else
-            {
-                sb.Append(item.Content.CanonicalKey());
-            }
-        }
-
-        return sb.ToString();
+        return seq.BuildVisibleText();
     }
 
     /// <summary>Canonical fingerprint of visible state for oracle convergence assertions.</summary>
@@ -522,7 +648,6 @@ internal sealed class DocumentStore
     {
         var sb = new StringBuilder();
 
-        // Prefer root text named "text" for oracle parity; otherwise concatenate all root texts.
         ContainerRef textRoot = ContainerRef.Root("text");
         sb.Append("text=").Append(VisibleText(textRoot)).Append('|');
 
@@ -560,53 +685,139 @@ internal sealed class DocumentStore
         return sb.ToString();
     }
 
-    private void IntegratePending()
+    private bool IntegratePending(out string? error)
     {
-        _ = AlwaysSafeNormalizer.CompactPending(_pending, _ops, ref _pendingBytes, EstimateBytes);
+        error = null;
+        _ = NormalizePending();
 
-        bool progress;
-        do
+        SeedReadyQueue();
+
+        while (_pending.TryDequeueReady(out ConcordantOperation op))
         {
-            progress = false;
-            for (int i = 0; i < _pending.Count;)
+            if (_ops.ContainsKey(op.Id))
             {
-                ConcordantOperation op = _pending[i];
-                if (_ops.ContainsKey(op.Id))
+                if (_pending.Remove(op.Id, out ConcordantOperation removed))
                 {
-                    _pendingBytes -= EstimateBytes(op);
-                    _pending.RemoveAt(i);
-                    continue;
+                    _pendingBytes -= EstimateBytes(removed);
                 }
 
-                if (!CanIntegrate(op))
+                continue;
+            }
+
+            if (!CanIntegrate(op))
+            {
+                RegisterDependencies(op);
+                continue;
+            }
+
+            try
+            {
+                IntegrateOne(op);
+            }
+            catch (OverflowException)
+            {
+                // Leave in pending; do not create silent clock holes.
+                RegisterDependencies(op);
+                continue;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Retention / structural quota: do not leave permanently pending.
+                if (IsRetentionQuotaMessage(ex.Message))
                 {
-                    i++;
-                    continue;
+                    error = ex.Message;
+                    return false;
                 }
 
-                try
-                {
-                    IntegrateOne(op);
-                }
-                catch (OverflowException)
-                {
-                    // Leave in pending; do not create silent clock holes.
-                    i++;
-                    continue;
-                }
-                catch (InvalidOperationException)
-                {
-                    // Quota / structural: leave pending for a later successful apply path / reject.
-                    i++;
-                    continue;
-                }
+                RegisterDependencies(op);
+                continue;
+            }
 
-                _pendingBytes -= EstimateBytes(op);
-                _pending.RemoveAt(i);
-                progress = true;
+            if (_pending.Remove(op.Id, out ConcordantOperation integrated))
+            {
+                _pendingBytes -= EstimateBytes(integrated);
+            }
+
+            OnIntegrated(op);
+        }
+
+        return true;
+    }
+
+    private static bool IsRetentionQuotaMessage(string message) =>
+        message.Contains("MaxOperations", StringComparison.Ordinal)
+        || message.Contains("MaxHistoricalSessions", StringComparison.Ordinal);
+
+    private void SeedReadyQueue()
+    {
+        foreach (ConcordantOperation op in _pending.Operations)
+        {
+            if (CanIntegrate(op))
+            {
+                _pending.EnqueueReady(op.Id);
+            }
+            else
+            {
+                RegisterDependencies(op);
             }
         }
-        while (progress);
+    }
+
+    private void RegisterDependencies(ConcordantOperation op)
+    {
+        ulong expectedClock = _frontier.TryGetValue(op.Id.Session, out ulong n) ? n + 1 : 1UL;
+        if (op.Id.Clock != expectedClock)
+        {
+            // Wait for the predecessor clock in this session (if present in pending/integrated).
+            if (op.Id.Clock > 1)
+            {
+                var pred = new OpId(op.Id.Session, op.Id.Clock - 1);
+                if (!_ops.ContainsKey(pred))
+                {
+                    _pending.RegisterWaiter(pred, op.Id);
+                }
+            }
+        }
+
+        if (op.LamportSource is OpId source && !_ops.ContainsKey(source))
+        {
+            _pending.RegisterWaiter(source, op.Id);
+        }
+
+        switch (op)
+        {
+            case ConcordantOperation.SeqInsert insert:
+                if (insert.LeftOrigin is OpId left && !_ops.ContainsKey(left))
+                {
+                    _pending.RegisterWaiter(left, op.Id);
+                }
+
+                if (insert.RightOrigin is OpId right && !_ops.ContainsKey(right))
+                {
+                    _pending.RegisterWaiter(right, op.Id);
+                }
+
+                break;
+            case ConcordantOperation.SeqDelete delete:
+                if (!_seqItemOwner.ContainsKey(delete.TargetId))
+                {
+                    _pending.RegisterWaiter(delete.TargetId, op.Id);
+                }
+
+                break;
+        }
+    }
+
+    private void OnIntegrated(ConcordantOperation op)
+    {
+        _pending.NotifyIntegrated(op.Id, id => _pending.EnqueueReady(id));
+
+        // Next contiguous clock for this session may now be ready.
+        ulong nextClock = op.Id.Clock + 1;
+        if (_pending.TryGetBySessionClock(op.Id.Session, nextClock, out ConcordantOperation next))
+        {
+            _pending.EnqueueReady(next.Id);
+        }
     }
 
     private bool CanIntegrate(ConcordantOperation op)
@@ -676,7 +887,6 @@ internal sealed class DocumentStore
     {
         if (!_sequences.TryGetValue(container, out YataSequence? seq))
         {
-            // Sequence may be created on first insert if container kind is known.
             if (!ContainerExists(container, RootKind.Text) && !ContainerExists(container, RootKind.Array))
             {
                 return false;
@@ -713,13 +923,11 @@ internal sealed class DocumentStore
 
     private bool FindSequenceContaining(OpId targetId, out YataSequence? sequence)
     {
-        foreach (YataSequence seq in _sequences.Values)
+        if (_seqItemOwner.TryGetValue(targetId, out ContainerRef owner)
+            && _sequences.TryGetValue(owner, out YataSequence? seq))
         {
-            if (seq.Contains(targetId))
-            {
-                sequence = seq;
-                return true;
-            }
+            sequence = seq;
+            return true;
         }
 
         sequence = null;
@@ -840,6 +1048,7 @@ internal sealed class DocumentStore
         EnsureSequenceContainer(op.Container);
         YataSequence seq = _sequences[op.Container];
         seq.IntegrateInsert(op.Id, op.LeftOrigin, op.RightOrigin, op.Content);
+        _seqItemOwner[op.Id] = op.Container;
 
         if (op.Content is ConcordantContent.NestedContent nested)
         {
@@ -865,7 +1074,6 @@ internal sealed class DocumentStore
         RootKind? kind = TryGetContainerKind(container);
         if (kind is null)
         {
-            // Implicit text root for oracle convenience when tests insert without declare.
             if (container.IsRoot)
             {
                 _roots[container.RootName!] = new RootState
@@ -978,6 +1186,106 @@ internal sealed class DocumentStore
         catch
         {
             // Observer exception isolation.
+        }
+    }
+
+    private StoreSnapshot CaptureSnapshot()
+    {
+        var roots = new Dictionary<string, RootState>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, RootState> entry in _roots)
+        {
+            roots[entry.Key] = new RootState
+            {
+                Kind = entry.Value.Kind,
+                DeclarationId = entry.Value.DeclarationId,
+                Conflict = entry.Value.Conflict,
+            };
+        }
+
+        var nested = new Dictionary<OpId, NestedState>(_nested);
+        var maps = new Dictionary<(ContainerRef Map, string Key), List<MapAssignment>>();
+        foreach (KeyValuePair<(ContainerRef Map, string Key), List<MapAssignment>> entry in _maps)
+        {
+            maps[entry.Key] = entry.Value.ToList();
+        }
+
+        var sequences = new Dictionary<ContainerRef, YataSequence>();
+        foreach (KeyValuePair<ContainerRef, YataSequence> entry in _sequences)
+        {
+            sequences[entry.Key] = entry.Value.Clone();
+        }
+
+        return new StoreSnapshot
+        {
+            Ops = new Dictionary<OpId, ConcordantOperation>(_ops),
+            Frontier = new Dictionary<SessionId, ulong>(_frontier),
+            SessionLamport = new Dictionary<SessionId, ulong>(_sessionLamport),
+            Pending = _pending.Clone(),
+            PendingBytes = _pendingBytes,
+            Roots = roots,
+            Nested = nested,
+            Maps = maps,
+            Sequences = sequences,
+            SeqItemOwner = new Dictionary<OpId, ContainerRef>(_seqItemOwner),
+        };
+    }
+
+    private void RestoreSnapshot(StoreSnapshot snapshot)
+    {
+        _ops.Clear();
+        foreach (KeyValuePair<OpId, ConcordantOperation> entry in snapshot.Ops)
+        {
+            _ops[entry.Key] = entry.Value;
+        }
+
+        _frontier.Clear();
+        foreach (KeyValuePair<SessionId, ulong> entry in snapshot.Frontier)
+        {
+            _frontier[entry.Key] = entry.Value;
+        }
+
+        _sessionLamport.Clear();
+        foreach (KeyValuePair<SessionId, ulong> entry in snapshot.SessionLamport)
+        {
+            _sessionLamport[entry.Key] = entry.Value;
+        }
+
+        _pending.Clear();
+        foreach (ConcordantOperation op in snapshot.Pending.Operations)
+        {
+            _pending.Add(op);
+        }
+
+        _pendingBytes = snapshot.PendingBytes;
+
+        _roots.Clear();
+        foreach (KeyValuePair<string, RootState> entry in snapshot.Roots)
+        {
+            _roots[entry.Key] = entry.Value;
+        }
+
+        _nested.Clear();
+        foreach (KeyValuePair<OpId, NestedState> entry in snapshot.Nested)
+        {
+            _nested[entry.Key] = entry.Value;
+        }
+
+        _maps.Clear();
+        foreach (KeyValuePair<(ContainerRef Map, string Key), List<MapAssignment>> entry in snapshot.Maps)
+        {
+            _maps[entry.Key] = entry.Value;
+        }
+
+        _sequences.Clear();
+        foreach (KeyValuePair<ContainerRef, YataSequence> entry in snapshot.Sequences)
+        {
+            _sequences[entry.Key] = entry.Value;
+        }
+
+        _seqItemOwner.Clear();
+        foreach (KeyValuePair<OpId, ContainerRef> entry in snapshot.SeqItemOwner)
+        {
+            _seqItemOwner[entry.Key] = entry.Value;
         }
     }
 

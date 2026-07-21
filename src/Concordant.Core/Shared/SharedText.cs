@@ -28,7 +28,8 @@ public sealed class SharedText
         get
         {
             _document.EnsureReadable();
-            return ToString().Length;
+            YataSequence? seq = _document.Store.TryGetSequence(_container);
+            return seq?.VisibleUtf16Length ?? 0;
         }
     }
 
@@ -50,7 +51,8 @@ public sealed class SharedText
             return;
         }
 
-        string current = ToString();
+        YataSequence? seq = _document.Store.TryGetSequence(_container);
+        string current = seq?.BuildVisibleText() ?? string.Empty;
         Utf16Text.EnsureOffsetNotSplittingSurrogate(current, utf16Offset);
 
         Transaction tx = _document.RequireTransaction();
@@ -76,49 +78,19 @@ public sealed class SharedText
             return;
         }
 
-        string current = ToString();
+        YataSequence? seq = _document.Store.TryGetSequence(_container);
+        if (seq is null)
+        {
+            throw new ArgumentOutOfRangeException(nameof(utf16Offset));
+        }
+
+        string current = seq.BuildVisibleText();
         Utf16Text.EnsureRangeNotSplittingSurrogate(current, utf16Offset, utf16Length);
 
         Transaction tx = _document.RequireTransaction();
-        List<(OpId Id, int Utf16Len)> items = GetVisibleTextItems();
-        int cursor = 0;
-        int remaining = utf16Length;
-        int start = utf16Offset;
-
-        foreach ((OpId id, int len) in items)
+        foreach (OpId id in seq.CollectUtf16DeleteTargets(utf16Offset, utf16Length))
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
-            int itemEnd = cursor + len;
-            if (itemEnd <= start)
-            {
-                cursor = itemEnd;
-                continue;
-            }
-
-            if (cursor >= start + utf16Length)
-            {
-                break;
-            }
-
-            // Item overlaps the deletion range. Because items are Unicode scalars,
-            // they are never split by a valid UTF-16 range.
-            if (cursor < start || itemEnd > start + utf16Length)
-            {
-                throw new ArgumentException("Delete range must align to Unicode scalar boundaries.");
-            }
-
             tx.SeqDelete(id);
-            remaining -= len;
-            cursor = itemEnd;
-        }
-
-        if (remaining != 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(utf16Length));
         }
     }
 
@@ -131,56 +103,19 @@ public sealed class SharedText
 
     private void ResolveInsertOrigins(int utf16Offset, out OpId? left, out OpId? right)
     {
-        List<(OpId Id, int Utf16Len)> items = GetVisibleTextItems();
-        int cursor = 0;
-        left = null;
-        right = null;
-
-        foreach ((OpId id, int len) in items)
-        {
-            if (cursor + len <= utf16Offset)
-            {
-                left = id;
-                cursor += len;
-                continue;
-            }
-
-            if (cursor == utf16Offset)
-            {
-                right = id;
-                return;
-            }
-
-            throw new ArgumentException("UTF-16 offset must align to a Unicode scalar boundary.", nameof(utf16Offset));
-        }
-
-        if (cursor != utf16Offset)
-        {
-            throw new ArgumentOutOfRangeException(nameof(utf16Offset));
-        }
-
-        right = null;
-    }
-
-    private List<(OpId Id, int Utf16Len)> GetVisibleTextItems()
-    {
-        var result = new List<(OpId, int)>();
         YataSequence? seq = _document.Store.TryGetSequence(_container);
         if (seq is null)
         {
-            return result;
-        }
-
-        foreach (SeqItem item in seq.VisibleItems())
-        {
-            if (item.Content is not ConcordantContent.ScalarContent { Value: ConcordantScalar.StringScalar s })
+            if (utf16Offset != 0)
             {
-                throw new InvalidOperationException("SharedText sequence contains a non-string item.");
+                throw new ArgumentOutOfRangeException(nameof(utf16Offset));
             }
 
-            result.Add((item.Id, s.Value.Length));
+            left = null;
+            right = null;
+            return;
         }
 
-        return result;
+        seq.ResolveUtf16InsertOrigins(utf16Offset, out left, out right);
     }
 }

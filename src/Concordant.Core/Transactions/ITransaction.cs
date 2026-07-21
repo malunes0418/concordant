@@ -121,7 +121,8 @@ internal sealed class Transaction : ITransaction
         _ops.Add(op);
         _clock.NoteLocal(id, lamport);
 
-        // Eagerly integrate so mid-transaction reads and chained inserts see prior ops.
+        // Integrate immediately so mid-transaction reads and chained inserts see prior ops.
+        // ConcordantDocument.Transact checkpoints the store and rolls back on callback failure.
         ApplyResult result = _document.Store.Apply(new OperationBatch(new[] { op }));
         if (result.Status is not ApplyStatus.Integrated and not ApplyStatus.Duplicate)
         {

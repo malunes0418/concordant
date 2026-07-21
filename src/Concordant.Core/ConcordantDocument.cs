@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Threading;
 using Concordant.Internal;
 using Concordant.Shared;
 using Concordant.Sync;
@@ -11,6 +13,13 @@ namespace Concordant;
 /// </summary>
 public sealed class ConcordantDocument : IDisposable
 {
+    /// <summary>
+    /// Canonical state-vector byte layout (v1):
+    /// <c>count:u32 LE</c>, then <paramref name="count"/> entries sorted by <see cref="SessionId"/> ascending,
+    /// each <c>(session:16 bytes big-endian, clock:u64 LE)</c>.
+    /// </summary>
+    public const int StateVectorEntryByteLength = 24;
+
     private readonly ConcordantDocumentOptions _options;
     private readonly DocumentStore _store;
     private readonly LocalClock _clock;
@@ -22,7 +31,7 @@ public sealed class ConcordantDocument : IDisposable
     private readonly Dictionary<OpId, SharedArray> _nestedArrays = new();
     private readonly Dictionary<OpId, SharedText> _nestedTexts = new();
 
-    private bool _inCall;
+    private int _inCall;
     private Transaction? _activeTransaction;
     private bool _disposed;
     private readonly List<Action<OperationBatch, object?>> _transactionObservers = new();
@@ -80,8 +89,9 @@ public sealed class ConcordantDocument : IDisposable
     }
 
     /// <summary>
-    /// Runs a local transaction. Returns the committed operation batch (also integrated locally),
-    /// or <c>null</c> when the transaction made no mutations.
+    /// Runs a local transaction with all-or-nothing semantics for document state, writer clock,
+    /// frontier, pending ops, and undo notifications. Mid-transaction reads see staged mutations;
+    /// a failed callback leaves no visible changes.
     /// </summary>
     /// <param name="build">Mutation callback.</param>
     /// <param name="origin">
@@ -99,20 +109,37 @@ public sealed class ConcordantDocument : IDisposable
                 throw CreateConcurrentException();
             }
 
+            LocalClock.Snapshot clockSnapshot = _clock.Capture();
+            _store.BeginLocalTransaction();
             var tx = new Transaction(this, _clock);
             _activeTransaction = tx;
+            bool committed = false;
             try
             {
                 build(tx);
                 if (!tx.HasOperations)
                 {
+                    _store.RollbackLocalTransaction();
+                    _clock.Restore(clockSnapshot);
                     return null;
                 }
 
-                // Ops were eagerly integrated during Append for mid-transaction visibility.
+                // Ops were integrated during Append for mid-transaction visibility; commit the checkpoint.
                 OperationBatch batch = tx.Complete();
+                _store.CommitLocalTransaction();
+                committed = true;
                 NotifyTransactionObservers(batch, origin);
                 return batch;
+            }
+            catch
+            {
+                if (!committed)
+                {
+                    _store.RollbackLocalTransaction();
+                    _clock.Restore(clockSnapshot);
+                }
+
+                throw;
             }
             finally
             {
@@ -193,6 +220,113 @@ public sealed class ConcordantDocument : IDisposable
         {
             Exit();
         }
+    }
+
+    /// <summary>
+    /// Encodes the document state vector using the canonical v1 layout documented on
+    /// <see cref="StateVectorEntryByteLength"/>.
+    /// </summary>
+    public byte[] EncodeStateVector()
+    {
+        Enter();
+        try
+        {
+            return EncodeStateVector(_store.StateVector);
+        }
+        finally
+        {
+            Exit();
+        }
+    }
+
+    /// <summary>
+    /// Encodes <paramref name="stateVector"/> using the canonical v1 layout:
+    /// <c>count:u32 LE</c>, then sorted <c>(session:16 BE, clock:u64 LE)</c> entries.
+    /// </summary>
+    public static byte[] EncodeStateVector(IReadOnlyDictionary<SessionId, ulong> stateVector)
+    {
+        ArgumentNullException.ThrowIfNull(stateVector);
+        List<KeyValuePair<SessionId, ulong>> ordered = stateVector.OrderBy(static kv => kv.Key).ToList();
+        byte[] bytes = new byte[4 + (ordered.Count * StateVectorEntryByteLength)];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0, 4), (uint)ordered.Count);
+        int offset = 4;
+        foreach ((SessionId session, ulong clock) in ordered)
+        {
+            session.WriteBytes(bytes.AsSpan(offset, 16));
+            offset += 16;
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(offset, 8), clock);
+            offset += 8;
+        }
+
+        return bytes;
+    }
+
+    /// <summary>
+    /// Tries to decode a canonical v1 state-vector blob. Returns <c>false</c> for truncated,
+    /// oversized, or otherwise malformed input without throwing.
+    /// </summary>
+    /// <param name="bytes">Encoded state vector.</param>
+    /// <param name="stateVector">Decoded map when the method returns <c>true</c>.</param>
+    /// <param name="maxSessions">
+    /// Upper bound on claimed entry count (defaults to 1,048,576) to avoid unbounded allocation.
+    /// </param>
+    public static bool TryDecodeStateVector(
+        ReadOnlySpan<byte> bytes,
+        out IReadOnlyDictionary<SessionId, ulong>? stateVector,
+        int maxSessions = 1_048_576)
+    {
+        stateVector = null;
+        if (maxSessions < 0)
+        {
+            return false;
+        }
+
+        if (bytes.Length < 4)
+        {
+            return false;
+        }
+
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
+        if (count > (uint)maxSessions)
+        {
+            return false;
+        }
+
+        long expected = 4L + ((long)count * StateVectorEntryByteLength);
+        if (bytes.Length != expected)
+        {
+            return false;
+        }
+
+        var map = new Dictionary<SessionId, ulong>((int)count);
+        int offset = 4;
+        SessionId? previous = null;
+        for (uint i = 0; i < count; i++)
+        {
+            if (!SessionId.TryReadBytes(bytes.Slice(offset, 16), out SessionId session))
+            {
+                return false;
+            }
+
+            offset += 16;
+            ulong clock = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, 8));
+            offset += 8;
+
+            if (previous is SessionId prev && session.CompareTo(prev) <= 0)
+            {
+                return false;
+            }
+
+            if (!map.TryAdd(session, clock))
+            {
+                return false;
+            }
+
+            previous = session;
+        }
+
+        stateVector = map;
+        return true;
     }
 
     /// <summary>
@@ -616,15 +750,13 @@ public sealed class ConcordantDocument : IDisposable
     private void Enter()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_inCall)
+        if (Interlocked.CompareExchange(ref _inCall, 1, 0) != 0)
         {
             throw CreateConcurrentException();
         }
-
-        _inCall = true;
     }
 
-    private void Exit() => _inCall = false;
+    private void Exit() => Interlocked.Exchange(ref _inCall, 0);
 
     private static InvalidOperationException CreateConcurrentException() =>
         new("ConcordantDocument is caller-serialized; concurrent or reentrant calls are not allowed.");

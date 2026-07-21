@@ -1,3 +1,4 @@
+using Concordant.Internal.Sequences;
 using Concordant.Shared;
 using Concordant.Values;
 
@@ -128,6 +129,155 @@ public sealed class DocumentKernelTests
 
         Assert.Equal(1, calls);
         Assert.True(doc.HasRootConflict("content"));
+    }
+
+    [Fact]
+    public void Failed_multi_op_transaction_rolls_back_all_state()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions
+        {
+            WriterSession = SessionId.FromSeed(1),
+            MaxContentUtf16Length = 4,
+        });
+
+        SharedMap map = doc.GetOrCreateMap("m");
+        string before = doc.VisibleFingerprint();
+        IReadOnlyDictionary<SessionId, ulong> beforeSv = doc.StateVector.ToDictionary(static kv => kv.Key, static kv => kv.Value);
+        int beforePending = doc.PendingOperationCount;
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            doc.Transact(tx =>
+            {
+                tx.Map("m").Set("a", ConcordantScalar.String("ok"));
+                tx.Map("m").Set("b", ConcordantScalar.String("also"));
+                // Third assignment exceeds MaxContentUtf16Length and must unwind a+b.
+                tx.Map("m").Set("c", ConcordantScalar.String("too-long"));
+            });
+        });
+
+        Assert.Equal(before, doc.VisibleFingerprint());
+        Assert.Equal(beforePending, doc.PendingOperationCount);
+        Assert.Equal(beforeSv, doc.StateVector);
+        Assert.False(map.TryGet("a", out _));
+        Assert.False(map.TryGet("b", out _));
+
+        // Retry after failure must succeed.
+        doc.Transact(tx => tx.Map("m").Set("a", ConcordantScalar.String("ok")));
+        Assert.True(map.TryGetScalar("a", out ConcordantScalar? value));
+        Assert.Equal("ok", ((ConcordantScalar.StringScalar)value!).Value);
+    }
+
+    [Fact]
+    public void Failed_transaction_does_not_notify_undo_observers()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions
+        {
+            WriterSession = SessionId.FromSeed(2),
+            MaxContentUtf16Length = 4,
+        });
+
+        int notifications = 0;
+        doc.AddTransactionObserver((_, _) => notifications++);
+
+        _ = doc.GetOrCreateMap("m");
+        Assert.Equal(1, notifications);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            doc.Transact(tx =>
+            {
+                tx.Map("m").Set("a", ConcordantScalar.String("ok"));
+                tx.Map("m").Set("b", ConcordantScalar.String("too-long"));
+            });
+        });
+
+        Assert.Equal(1, notifications);
+        Assert.False(doc.GetMap("m").TryGet("a", out _));
+    }
+
+    [Fact]
+    public void Concurrent_enter_fails_predictably()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions { WriterSession = SessionId.FromSeed(3) });
+        var ready = new ManualResetEventSlim(false);
+        var entered = new ManualResetEventSlim(false);
+        Exception? backgroundError = null;
+
+        Thread background = new(() =>
+        {
+            try
+            {
+                ready.Wait();
+                entered.Set();
+                _ = doc.EncodeStateVector();
+            }
+            catch (Exception ex)
+            {
+                backgroundError = ex;
+            }
+        });
+        background.Start();
+
+        doc.Transact(_ =>
+        {
+            ready.Set();
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            Thread.Sleep(50);
+        });
+
+        background.Join(TimeSpan.FromSeconds(2));
+        Assert.IsType<InvalidOperationException>(backgroundError);
+        Assert.Contains("caller-serialized", backgroundError!.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Encode_state_vector_round_trips_and_rejects_malformed()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions { WriterSession = SessionId.FromSeed(4) });
+        doc.Transact(tx =>
+        {
+            tx.GetOrCreateText("t").Insert(0, "x");
+            tx.GetOrCreateMap("m").Set("k", ConcordantScalar.String("v"));
+        });
+
+        byte[] encoded = doc.EncodeStateVector();
+        Assert.True(ConcordantDocument.TryDecodeStateVector(encoded, out IReadOnlyDictionary<SessionId, ulong>? decoded));
+        Assert.NotNull(decoded);
+        Assert.Equal(doc.StateVector.Count, decoded!.Count);
+        foreach (KeyValuePair<SessionId, ulong> kv in doc.StateVector)
+        {
+            Assert.Equal(kv.Value, decoded[kv.Key]);
+        }
+
+        // Deterministic regardless of dictionary insertion order.
+        var shuffled = doc.StateVector.Reverse().ToDictionary(static kv => kv.Key, static kv => kv.Value);
+        Assert.Equal(encoded, ConcordantDocument.EncodeStateVector(shuffled));
+
+        Assert.False(ConcordantDocument.TryDecodeStateVector(encoded.AsSpan(0, Math.Max(0, encoded.Length - 1)), out _));
+        Assert.False(ConcordantDocument.TryDecodeStateVector(new byte[] { 1, 0, 0, 0 }, out _));
+    }
+
+    [Fact]
+    public void Sequence_ownership_index_resolves_nested_containers()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions { WriterSession = SessionId.FromSeed(5) });
+        OpId nestedTextId = default;
+        OpId nestedItemId = default;
+
+        doc.Transact(tx =>
+        {
+            SharedMap root = tx.GetOrCreateMap("root");
+            SharedText nested = root.CreateText("notes");
+            nestedTextId = nested.Container.NestedId!.Value;
+            nested.Insert(0, "ab");
+            nestedItemId = doc.Store.TryGetSequence(nested.Container)!.GetVisibleUtf16Items()[0].Id;
+        });
+
+        Assert.True(doc.Store.TryGetSeqItem(nestedItemId, out ContainerRef container, out SeqItem item));
+        Assert.Equal(ContainerRef.Nested(nestedTextId), container);
+        Assert.False(item.Deleted);
+        Assert.Equal("a", ((ConcordantContent.ScalarContent)item.Content).Value is ConcordantScalar.StringScalar s ? s.Value : null);
     }
 }
 

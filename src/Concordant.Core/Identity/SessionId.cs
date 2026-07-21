@@ -61,6 +61,21 @@ public readonly struct SessionId : IEquatable<SessionId>, IComparable<SessionId>
         WriteUInt64BigEndian(destination.Slice(8), _lo);
     }
 
+    /// <summary>Tries to read a 16-byte big-endian session identity.</summary>
+    public static bool TryReadBytes(ReadOnlySpan<byte> source, out SessionId session)
+    {
+        if (source.Length < 16)
+        {
+            session = default;
+            return false;
+        }
+
+        ulong hi = BinaryPrimitivesReadUInt64BigEndian(source);
+        ulong lo = BinaryPrimitivesReadUInt64BigEndian(source.Slice(8));
+        session = new SessionId(hi, lo);
+        return true;
+    }
+
     public static bool operator ==(SessionId a, SessionId b) => a.Equals(b);
 
     public static bool operator !=(SessionId a, SessionId b) => !a.Equals(b);
