@@ -51,9 +51,14 @@ public sealed class SharedText
             return;
         }
 
+        // Bounds + scalar-boundary checks go through the UTF-16 rank index — avoid rebuilding
+        // the full visible string on every edit (O(n) alloc per call).
         YataSequence? seq = _document.Store.TryGetSequence(_container);
-        string current = seq?.BuildVisibleText() ?? string.Empty;
-        Utf16Text.EnsureOffsetNotSplittingSurrogate(current, utf16Offset);
+        int length = seq?.VisibleUtf16Length ?? 0;
+        if (utf16Offset < 0 || utf16Offset > length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(utf16Offset));
+        }
 
         Transaction tx = _document.RequireTransaction();
         ResolveInsertOrigins(utf16Offset, out OpId? left, out OpId? right);
@@ -84,9 +89,7 @@ public sealed class SharedText
             throw new ArgumentOutOfRangeException(nameof(utf16Offset));
         }
 
-        string current = seq.BuildVisibleText();
-        Utf16Text.EnsureRangeNotSplittingSurrogate(current, utf16Offset, utf16Length);
-
+        // CollectUtf16DeleteTargets validates range and Unicode-scalar alignment via the rank index.
         Transaction tx = _document.RequireTransaction();
         foreach (OpId id in seq.CollectUtf16DeleteTargets(utf16Offset, utf16Length))
         {

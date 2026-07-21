@@ -11,6 +11,7 @@ namespace Concordant.Benchmarks;
 /// <code>
 /// dotnet run -c Release -f net8.0 -- --filter "*"
 /// dotnet run -c Release -f net8.0 -- --limit
+/// dotnet run -c Release -f net8.0 -- --limit-smoke
 /// dotnet run -c Release -f net8.0 -- --filter "*Local*" --limit
 /// </code>
 /// </remarks>
@@ -19,10 +20,15 @@ public static class Program
     public static int Main(string[] args)
     {
         bool runLimit = args.Any(static a =>
-            string.Equals(a, "--limit", StringComparison.OrdinalIgnoreCase));
+            string.Equals(a, "--limit", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a, "--limit-smoke", StringComparison.OrdinalIgnoreCase));
+        bool smoke = args.Any(static a =>
+            string.Equals(a, "--limit-smoke", StringComparison.OrdinalIgnoreCase));
 
         string[] bdnArgs = args
-            .Where(static a => !string.Equals(a, "--limit", StringComparison.OrdinalIgnoreCase))
+            .Where(static a =>
+                !string.Equals(a, "--limit", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(a, "--limit-smoke", StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
         int exit = 0;
@@ -41,7 +47,7 @@ public static class Program
 
         if (runLimit)
         {
-            exit = LimitWorkloadRunner.Run();
+            exit = LimitWorkloadRunner.Run(smoke);
         }
 
         return exit;

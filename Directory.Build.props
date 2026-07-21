@@ -23,8 +23,8 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <VersionPrefix>0.1.0</VersionPrefix>
-    <VersionSuffix>beta.1</VersionSuffix>
-    <PackageReleaseNotes>0.1.0-beta.1: first public prerelease. Multi-targets net8.0 and net10.0 with equivalent APIs and native v1 wire format. See docs/compatibility.md and docs/support-policy.md.</PackageReleaseNotes>
+    <VersionSuffix>beta.2</VersionSuffix>
+    <PackageReleaseNotes>0.1.0-beta.2: atomic Transact, indexed pending/YATA paths, EncodeStateVector APIs, release hardening, and re-baselined performance gates. See CHANGELOG.md and docs/benchmarks.</PackageReleaseNotes>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsPackable)' == 'true'">

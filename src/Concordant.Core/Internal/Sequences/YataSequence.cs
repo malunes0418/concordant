@@ -337,13 +337,21 @@ internal sealed class YataSequence
             return;
         }
 
+        // Place via the nearest prior visible neighbor (O(tombstones)) instead of scanning
+        // from the head on every insert (O(n) — quadratic for sequential appends).
         int visiblePos = 0;
-        for (LinkedListNode<SeqItem>? n = _items.First; n is not null && !ReferenceEquals(n, node); n = n.Next)
+        for (LinkedListNode<SeqItem>? n = node.Previous; n is not null; n = n.Previous)
         {
-            if (!n.Value.Deleted
-                && n.Value.Content is ConcordantContent.ScalarContent { Value: ConcordantScalar.StringScalar })
+            if (n.Value.Deleted)
             {
-                visiblePos++;
+                continue;
+            }
+
+            if (n.Value.Content is ConcordantContent.ScalarContent { Value: ConcordantScalar.StringScalar }
+                && _visibleIndex.TryGetValue(n.Value.Id, out int prevIdx))
+            {
+                visiblePos = prevIdx + 1;
+                break;
             }
         }
 
@@ -374,6 +382,19 @@ internal sealed class YataSequence
 
     private int FindVisibleIndexAtOrAfter(int utf16Offset, out int startOffset)
     {
+        if (utf16Offset <= 0)
+        {
+            startOffset = 0;
+            return 0;
+        }
+
+        if (utf16Offset >= _visibleUtf16Length)
+        {
+            startOffset = _visibleUtf16Length;
+            return _visibleUtf16.Count;
+        }
+
+        // Prefix scan is fine for modest visible counts; middle-insert List shifts remain O(n).
         int cursor = 0;
         for (int i = 0; i < _visibleUtf16.Count; i++)
         {
