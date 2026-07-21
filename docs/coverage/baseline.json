@@ -1,0 +1,9 @@
+{
+  "measuredLineCoveragePercent": 76.58,
+  "lineCoverageMinimum": 70.0,
+  "measuredOn": "2026-07-21",
+  "framework": "net8.0",
+  "configuration": "Release",
+  "scope": "dotnet test Concordant.slnx --framework net8.0 --collect:XPlat Code Coverage (cobertura)",
+  "notes": "Initial beta.2 release-hardening baseline from a local Release/net8.0 test run. The CI floor is set ~6 percentage points below the measured aggregate to absorb collector/runner noise. Raise the floor as coverage improves; do not lower it without an explicit baseline update."
+}

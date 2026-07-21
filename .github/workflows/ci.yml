@@ -50,5 +50,62 @@ jobs:
       - name: Test net10.0
         run: dotnet test Concordant.slnx --framework net10.0 --configuration Release --no-build --verbosity normal
 
+      - name: Fuzz smoke net8.0
+        run: dotnet run --project tests/Concordant.Fuzz.Tests --framework net8.0 --configuration Release --no-build -- --smoke
+
+      - name: Fuzz smoke net10.0
+        run: dotnet run --project tests/Concordant.Fuzz.Tests --framework net10.0 --configuration Release --no-build -- --smoke
+
+      - name: Quickstart net8.0
+        run: dotnet run --project samples/Concordant.Quickstart --framework net8.0 --configuration Release --no-build
+
+      - name: Quickstart net10.0
+        run: dotnet run --project samples/Concordant.Quickstart --framework net10.0 --configuration Release --no-build
+
       - name: Pack
         run: dotnet pack Concordant.slnx --configuration Release --no-build -o artifacts/packages
+
+      - name: Validate packages
+        shell: pwsh
+        run: ./scripts/Validate-Packages.ps1 -PackageDirectory artifacts/packages
+
+      - name: Upload packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: concordant-packages
+          path: |
+            artifacts/packages/Concordant.*.nupkg
+            artifacts/packages/Concordant.*.snupkg
+          if-no-files-found: error
+
+      # Coverage is collected on Ubuntu/net8.0 only to keep the matrix lean and produce one baseline artifact.
+      - name: Test net8.0 with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: >
+          dotnet test Concordant.slnx
+          --framework net8.0
+          --configuration Release
+          --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory artifacts/coverage
+          --
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Assert coverage baseline
+        if: matrix.os == 'ubuntu-latest'
+        shell: pwsh
+        run: >
+          ./scripts/Assert-Coverage.ps1
+          -ResultsDirectory artifacts/coverage
+          -BaselinePath docs/coverage/baseline.json
+          -ReportPath artifacts/coverage/summary.json
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: concordant-coverage
+          path: |
+            artifacts/coverage/**
+          if-no-files-found: error

@@ -284,10 +284,12 @@ See the [open issues](https://github.com/malunes0418/concordant/issues) for a fu
 - [ADR 0001: Transactional struct store](docs/adr/0001-transactional-struct-store.md)
 - [Operation model](docs/spec/operation-model.md)
 - [Native format v1](docs/format/native-v1.md)
+- [Security policy](SECURITY.md)
 - [Security limits](docs/security/limits.md)
 - [Offline sync](docs/guides/offline-sync.md)
 - [Support policy](docs/support-policy.md)
 - [Compatibility](docs/compatibility.md)
+- [Coverage baseline](docs/coverage/README.md)
 - [Benchmarks](docs/benchmarks/README.md)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
