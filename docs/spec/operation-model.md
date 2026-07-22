@@ -84,6 +84,10 @@ Roots are keyed by canonical `Name` (ordinal string compare).
 
 For each `(MapId, Key)`, retain all assignments as history. Visible value is the assignment with the greatest `(Lamport, OpId)`.
 
+### Map removal (beta)
+
+This beta does **not** define a map-key removal / `MapDelete` operation. Native v1 has no removal marker, and adding one would be a wire break. Hosts that need “clear” semantics should overwrite the key with a new `MapSet` (for example a `Null` scalar). Prior assignments remain in history and are never garbage-collected in v1. A dedicated remove op is deferred until a later wire revision.
+
 ## 7. YATA sequence integration
 
 This section defines the Phase 1 reference integrator. It is intentionally simple and must stay easy to audit.

@@ -34,4 +34,9 @@ For the same canonical operation list, `net8.0` and `net10.0` must emit **byte-f
 
 ## Upgrading from earlier 0.1 builds
 
-This repository's first public prerelease is `0.1.0-beta.1`. There is no prior stable migration path. Future 0.1 builds that change wire or API will list explicit steps here.
+| From | To | Notes |
+|---|---|---|
+| (none) | `0.1.0-beta.1` | First public prerelease |
+| `0.1.0-beta.1` | `0.1.0-beta.2` | Additive: `EncodeStateVector` / `TryDecodeStateVector`. **Semantic:** failed local `Transact` callbacks now roll back completely (no partial commit). Native v1 bytes unchanged. Prefer Core state-vector helpers over host-private encoders. |
+
+See [CHANGELOG.md](../CHANGELOG.md).

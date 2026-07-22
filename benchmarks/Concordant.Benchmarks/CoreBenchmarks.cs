@@ -145,3 +145,78 @@ public class MetadataBenchmarks
     [Benchmark(Description = "StateVectorSessions_Churn500")]
     public long StateVectorSessions_Churn500() => WorkloadFactory.StateVectorSessionCount(_churn);
 }
+
+/// <summary>Isolated sequential append, random edit, pending integration, and rollback workloads.</summary>
+[Config(typeof(FastInProcessConfig))]
+[MemoryDiagnoser]
+public class ScalingPathBenchmarks
+{
+    private ConcordantDocument _rollbackDoc = null!;
+    private byte[] _gapUpdate = null!;
+    private byte[] _prefixUpdate = null!;
+    private byte[] _checkpoint = null!;
+    private ulong _seed;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _rollbackDoc = WorkloadFactory.CreateVisibleText(43, WorkloadFactory.SmallVisibleChars);
+        (_, _gapUpdate, _prefixUpdate) = WorkloadFactory.CreatePendingIntegrationPair(
+            44,
+            WorkloadFactory.PendingFillerOps);
+        using ConcordantDocument src = WorkloadFactory.CreateVisibleText(45, WorkloadFactory.MediumVisibleChars);
+        _checkpoint = src.EncodeFullState();
+        _seed = 200;
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _rollbackDoc.Dispose();
+    }
+
+    [Benchmark(Description = "SequentialInsert_4k")]
+    public long SequentialInsert_4k()
+    {
+        using ConcordantDocument doc = WorkloadFactory.CreateSequentialInserts(
+            _seed++,
+            WorkloadFactory.SequentialInsertCount);
+        return WorkloadFactory.IntegratedOpEstimate(doc);
+    }
+
+    [Benchmark(Description = "RandomInsertDelete_2k")]
+    public long RandomInsertDelete_2k()
+    {
+        using ConcordantDocument doc = WorkloadFactory.CreateRandomInsertDelete(
+            _seed++,
+            WorkloadFactory.RandomEditOps);
+        return WorkloadFactory.IntegratedOpEstimate(doc);
+    }
+
+    [Benchmark(Description = "PendingIntegration_ApplyGapThenPrefix")]
+    public ApplyStatus PendingIntegration_ApplyGapThenPrefix()
+    {
+        using ConcordantDocument target = WorkloadFactory.CreateEmpty(_seed++);
+        ApplyResult gap = target.ApplyUpdate(_gapUpdate);
+        if (gap.Status is ApplyStatus.Rejected)
+        {
+            throw new InvalidOperationException(gap.Detail ?? "Gap apply rejected.");
+        }
+
+        return target.ApplyUpdate(_prefixUpdate).Status;
+    }
+
+    [Benchmark(Description = "CheckpointLoad_Medium_Isolated")]
+    public string CheckpointLoad_Medium_Isolated()
+    {
+        using ConcordantDocument loaded = ConcordantDocument.CreateFromCheckpoint(_checkpoint);
+        return loaded.VisibleFingerprint();
+    }
+
+    [Benchmark(Description = "TransactionRollback_Small")]
+    public int TransactionRollback_Small()
+    {
+        WorkloadFactory.RunTransactionRollback(_rollbackDoc);
+        return _rollbackDoc.GetText("notes").Length;
+    }
+}

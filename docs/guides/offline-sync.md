@@ -26,6 +26,13 @@ Transport-agnostic merge for hosts that exchange opaque update bytes between rep
 
 `ConcordantDocument.StateVector` maps each historical session to its contiguous integrated clock frontier. Diffs are ops with clocks strictly greater than the remote entry for that session (or all ops for unknown sessions).
 
+For durable checkpoint metadata and peer handshakes, use the canonical helpers:
+
+- `EncodeStateVector()` / `EncodeStateVector(IReadOnlyDictionary<SessionId, ulong>)`
+- `TryDecodeStateVector(ReadOnlySpan<byte>, out …)`
+
+Layout (v1): `count:u32 LE`, then `count` entries sorted by `SessionId` ascending, each `(session:16 bytes big-endian, clock:u64 LE)`. Persistence abstractions still treat these bytes as opaque.
+
 ## Checkpoints and recovery
 
 - `EncodeFullState()` emits every integrated op (deterministic `OpId` order).

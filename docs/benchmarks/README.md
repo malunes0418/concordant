@@ -1,6 +1,6 @@
 # Benchmarks
 
-Fixed workloads for `0.1.0-beta.1` baselines. Prefer documenting results over last-minute micro-optimizations unless a hot path is clearly broken **and** oracle/wire traces remain identical.
+Fixed workloads for `0.1.0-beta.2` baselines. Prefer documenting results over last-minute micro-optimizations unless a hot path is clearly broken **and** oracle/wire traces remain identical.
 
 ## Workloads
 
@@ -11,7 +11,11 @@ Fixed workloads for `0.1.0-beta.1` baselines. Prefer documenting results over la
 | `CheckpointLoad_Medium` | medium full-state | `CreateFromCheckpoint` |
 | `EncodeFullState_Medium` / `EncodeUpdateSince_*` | medium | Encode cost & payload size |
 | `StateVectorSessions_Churn500` | 500 sessions | State-vector / metadata cardinality |
-| `--limit` FragmentedHistory | **10k ops** (plan target 1M) | Fragmented insert/delete history, checkpoint size, allocs |
+| `SequentialInsert_4k` | 4,096 end-appends | Sequential insert integration |
+| `RandomInsertDelete_2k` | 2,048 mixed edits | Middle insert/delete + rank shifts |
+| `PendingIntegration_ApplyGapThenPrefix` | cross-session gap | Isolated pending → integrate path |
+| `TransactionRollback_Small` | failed `Transact` | Atomic rollback correctness/cost |
+| `--limit` / `--limit-smoke` FragmentedHistory | **100k** gate / **10k** smoke (plan target 1M) | Fragmented insert/delete history |
 | `--limit` ActiveReplicas | 100 | One-shot full-mesh reconcile |
 | `--limit` HistoricalSessionChurn | 2,000 sessions | Session churn build cost & checkpoint growth |
 
@@ -24,19 +28,32 @@ Constants live in `benchmarks/Concordant.Benchmarks/WorkloadFactory.cs`. BDN use
 dotnet run --project benchmarks/Concordant.Benchmarks --framework net8.0 --configuration Release -- --filter "*"
 dotnet run --project benchmarks/Concordant.Benchmarks --framework net10.0 --configuration Release -- --filter "*"
 
-# One-shot limit workloads
+# One-shot limit workloads (100k fragmented gate + scaling probes)
 dotnet run --project benchmarks/Concordant.Benchmarks --framework net8.0 --configuration Release -- --limit
 dotnet run --project benchmarks/Concordant.Benchmarks --framework net10.0 --configuration Release -- --limit
+
+# Fast smoke (10k fragmented + same probes; suitable for manual/CI smoke)
+dotnet run --project benchmarks/Concordant.Benchmarks --framework net8.0 --configuration Release -- --limit-smoke
 ```
 
 ## Targets (reference machine)
 
-Plan targets (aspirational):
+| Class | Budget | Status (beta.2) |
+|---|---|---|
+| Local edits | p95 &lt; 1 ms | Met (small + medium) |
+| Small remote batch (~128 ops) | p95 &lt; 16 ms | Met |
+| Medium remote batch (~2k ops) | p95 &lt; 100 ms (net10); document net8 | **Re-baselined** from aspirational 16 ms (beta.1 was multi-second) |
+| Fragmented history | **100k ops** executable with recorded time/alloc; 1M = stretch | Gate met; 1M still out of window |
 
-- Local edits: **p95 &lt; 1 ms**
-- Normal remote batches: **p95 &lt; 16 ms**
+### Path to 1M fragmented history
 
-On the 2026-07-19 reference laptop, **local edits and small applies meet those targets**; **medium (~2k-op) apply/checkpoint do not** (multi-second). Documented as a known scaling gap — not micro-optimized in this beta.
+Remaining hotspots (not blocking beta.2):
+
+1. **UTF-16 visible `List` middle insert/delete** — still O(n) array shifts; needs a rope/fenwick/order-statistic tree for the visible rank index.
+2. **Apply-time `CaptureSnapshot`** — full store clone near retention-quota safety; skip or CoW when far from quotas.
+3. **Per-op integrate overhead** — decode + pending index + YATA conflict walk (~30–40 µs/op on the reference laptop).
+
+Until those land, keep `--limit` at 100k and `--limit-smoke` at 10k.
 
 ## Results
 

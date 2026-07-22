@@ -119,4 +119,8 @@ Configurable caps cover update bytes, operation count, retained bytes, historica
 
 ## Next phase
 
-Phase 2 implements the production kernel (`ConcordantDocument`, identity, Lamport sources, operation store, transactions, state vectors, quotas, atomic apply) and must match the reference oracle for every fixture and simulator seed.
+`0.1.0-beta.2` stabilizes the production kernel: atomic `Transact`, indexed pending/YATA/UTF-16 paths, canonical state-vector encode/decode, and release/performance gates.
+
+**Next (`beta.3`):** first production persistence package (prefer SQLite) plus a reference host recovery/sync sample. Transport policy stays outside `Concordant.Core`.
+
+Later: RC/1.0 for API/wire freeze, soak tests, and support guarantees. Rich text, presence, encryption, ecosystem codecs, and destructive tombstone GC remain deferred.

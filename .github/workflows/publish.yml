@@ -1,5 +1,9 @@
 name: publish
 
+# Publishes only after a verify job has restored, built, formatted, tested,
+# fuzz-smoked, run quickstart, packed, and validated .nupkg/.snupkg contents.
+# The publish job consumes those verified package artifacts (does not pack blindly).
+
 on:
   workflow_dispatch:
   release:
@@ -10,10 +14,14 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
-    environment: nuget
     steps:
+      - name: Configure git line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -28,8 +36,82 @@ jobs:
           dotnet-version: '10.0.x'
           global-json-file: global.json
 
+      - name: Restore
+        run: dotnet restore Concordant.slnx
+
+      - name: Build
+        run: dotnet build Concordant.slnx --configuration Release --no-restore
+
+      - name: Format check
+        run: dotnet format Concordant.slnx --verify-no-changes --no-restore
+
+      - name: Test net8.0
+        run: dotnet test Concordant.slnx --framework net8.0 --configuration Release --no-build --verbosity normal
+
+      - name: Test net10.0
+        run: dotnet test Concordant.slnx --framework net10.0 --configuration Release --no-build --verbosity normal
+
+      - name: Fuzz smoke net8.0
+        run: dotnet run --project tests/Concordant.Fuzz.Tests --framework net8.0 --configuration Release --no-build -- --smoke
+
+      - name: Fuzz smoke net10.0
+        run: dotnet run --project tests/Concordant.Fuzz.Tests --framework net10.0 --configuration Release --no-build -- --smoke
+
+      - name: Quickstart net8.0
+        run: dotnet run --project samples/Concordant.Quickstart --framework net8.0 --configuration Release --no-build
+
+      - name: Quickstart net10.0
+        run: dotnet run --project samples/Concordant.Quickstart --framework net10.0 --configuration Release --no-build
+
       - name: Pack
-        run: dotnet pack Concordant.slnx -c Release -o artifacts
+        run: dotnet pack Concordant.slnx --configuration Release --no-build -o artifacts/packages
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          tag=""
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Validate packages
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.tag.outputs.value }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            ./scripts/Validate-Packages.ps1 -PackageDirectory artifacts/packages
+          }
+          else {
+            ./scripts/Validate-Packages.ps1 -PackageDirectory artifacts/packages -ReleaseTag $tag
+          }
+
+      - name: Upload verified packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-concordant-packages
+          path: |
+            artifacts/packages/Concordant.*.nupkg
+            artifacts/packages/Concordant.*.snupkg
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - name: Download verified packages
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-concordant-packages
+          path: artifacts
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
 
       - name: NuGet login (OIDC)
         uses: NuGet/login@v1
@@ -46,12 +128,15 @@ jobs:
             echo "No Concordant.*.nupkg files found under artifacts/"
             exit 1
           fi
+          echo "Publishing verified packages:"
+          printf '  %s\n' "${nupkgs[@]}"
           dotnet nuget push "artifacts/Concordant.*.nupkg" \
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
           snupkgs=(artifacts/Concordant.*.snupkg)
           if [ ${#snupkgs[@]} -gt 0 ]; then
+            printf '  %s\n' "${snupkgs[@]}"
             dotnet nuget push "artifacts/Concordant.*.snupkg" \
               --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json \

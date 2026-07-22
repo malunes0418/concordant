@@ -13,7 +13,7 @@ artifacts/
 
 ## Test / coverage
 TestResults/
-coverage/
+/coverage/
 *.coverage
 *.coveragexml
 

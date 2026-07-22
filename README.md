@@ -92,7 +92,7 @@ Features:
 
 ### Packages & Status
 
-**`0.1.0-beta.1`** — first public prerelease. APIs may change before 1.0.
+**`0.1.0-beta.2`** — kernel stabilization prerelease (atomic transactions, scaling indexes, state-vector APIs, release gates). APIs may still change before 1.0.
 
 | Package | Role |
 |---|---|
@@ -134,18 +134,17 @@ Clone the repo (or install the NuGet packages) and follow the steps below to bui
 
 #### Install from packages
 
-Packages are intended for NuGet as **`0.1.0-beta.1`**. If they are not yet on [nuget.org](https://www.nuget.org/), pack locally:
+[`Concordant.Core`](https://www.nuget.org/packages/Concordant.Core) and [`Concordant.Persistence.Abstractions`](https://www.nuget.org/packages/Concordant.Persistence.Abstractions) are published on [nuget.org](https://www.nuget.org/) (current line: **`0.1.0-beta.2`** once this release is tagged; **`0.1.0-beta.1`** is already available).
+
+```sh
+dotnet add package Concordant.Core --version 0.1.0-beta.2
+dotnet add package Concordant.Persistence.Abstractions --version 0.1.0-beta.2
+```
+
+To pack locally from source:
 
 ```sh
 dotnet pack Concordant.slnx --configuration Release
-# then add a local source, or reference project/output nupkgs
-```
-
-Once published:
-
-```sh
-dotnet add package Concordant.Core --version 0.1.0-beta.1
-dotnet add package Concordant.Persistence.Abstractions --version 0.1.0-beta.1
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -177,6 +176,7 @@ _ = doc.Transact(tx =>
 
 // Empty remote state vector => full missing update for peers that know nothing.
 byte[] update = doc.EncodeUpdateSince(new Dictionary<SessionId, ulong>());
+byte[] frontier = doc.EncodeStateVector(); // canonical 24-byte-entry layout
 
 using var peer = new ConcordantDocument();
 ApplyResult result = peer.ApplyUpdate(update);
@@ -266,13 +266,16 @@ benchmarks/                               Performance harness docs & projects
 - [x] Session-local selective undo
 - [x] Persistence abstractions (`IConcordantAppendLog`, `IConcordantCheckpointStore`)
 - [x] Dual-target packages for `net8.0` / `net10.0`
+- [x] Atomic local transactions + indexed pending/YATA paths (`0.1.0-beta.2`)
+- [x] Canonical state-vector encode/decode APIs (`0.1.0-beta.2`)
+- [ ] Production storage adapters (target: `beta.3`, prefer SQLite)
+- [ ] Reference host recovery/sync sample
 - [ ] Networking stacks
-- [ ] Production storage adapters
 - [ ] Rich text, schemas, presence
 - [ ] Encryption and ecosystem codecs
 - [ ] Destructive tombstone GC
 
-See the [open issues](https://github.com/malunes0418/concordant/issues) for a full list of proposed features (and known issues). Pre-1.0 stability notes live in the [support policy](docs/support-policy.md) and [compatibility](docs/compatibility.md) docs.
+See the [open issues](https://github.com/malunes0418/concordant/issues) for a full list of proposed features (and known issues). Pre-1.0 stability notes live in the [support policy](docs/support-policy.md) and [compatibility](docs/compatibility.md) docs. Release history: [CHANGELOG.md](CHANGELOG.md).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -280,14 +283,17 @@ See the [open issues](https://github.com/malunes0418/concordant/issues) for a fu
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
 - [Design](docs/design/concordant-framework.md)
 - [ADR 0001: Transactional struct store](docs/adr/0001-transactional-struct-store.md)
 - [Operation model](docs/spec/operation-model.md)
 - [Native format v1](docs/format/native-v1.md)
+- [Security policy](SECURITY.md)
 - [Security limits](docs/security/limits.md)
 - [Offline sync](docs/guides/offline-sync.md)
 - [Support policy](docs/support-policy.md)
 - [Compatibility](docs/compatibility.md)
+- [Coverage baseline](docs/coverage/README.md)
 - [Benchmarks](docs/benchmarks/README.md)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

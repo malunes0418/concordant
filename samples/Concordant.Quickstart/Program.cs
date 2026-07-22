@@ -58,7 +58,7 @@ public static class Program
 
             // --- Checkpoint (covers log through tip), then a post-checkpoint update for replay ---
             byte[] fullState = live.EncodeFullState();
-            byte[] stateVectorBytes = SampleStateVectorEncoding.Encode(live.StateVector);
+            byte[] stateVectorBytes = live.EncodeStateVector();
             long tip = await log.GetTipSequenceAsync();
             var checkpoint = new ConcordantCheckpoint(fullState, stateVectorBytes, coveredLogSequence: tip);
             await checkpoints.SaveAsync(checkpoint);

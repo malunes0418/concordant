@@ -18,6 +18,30 @@ internal sealed class LocalClock
 
     public ulong Clock => _clock;
 
+    internal readonly struct Snapshot
+    {
+        public required ulong Clock { get; init; }
+        public required ulong Lamport { get; init; }
+        public required OpId? MaxObserved { get; init; }
+        public required ulong ObservedLamport { get; init; }
+    }
+
+    internal Snapshot Capture() => new()
+    {
+        Clock = _clock,
+        Lamport = _lamport,
+        MaxObserved = _maxObserved,
+        ObservedLamport = _observedLamport,
+    };
+
+    internal void Restore(Snapshot snapshot)
+    {
+        _clock = snapshot.Clock;
+        _lamport = snapshot.Lamport;
+        _maxObserved = snapshot.MaxObserved;
+        _observedLamport = snapshot.ObservedLamport;
+    }
+
     public void ObserveOp(OpId id, ulong lamport)
     {
         if (_maxObserved is null

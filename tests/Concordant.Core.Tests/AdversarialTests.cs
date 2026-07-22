@@ -88,6 +88,74 @@ public sealed class AdversarialTests
     }
 
     [Fact]
+    public void Deferred_max_operations_rejects_gap_pending_instead_of_starving()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions
+        {
+            WriterSession = SessionId.FromSeed(1),
+            MaxOperations = 1,
+            MaxClockGap = 100,
+        });
+
+        SessionId remote = SessionId.FromSeed(40);
+        string before = doc.VisibleFingerprint();
+
+        // clock 2 would require clock 1 as well → eventual 2 ops > MaxOperations.
+        ApplyResult rejected = doc.Apply(new OperationBatch(new ConcordantOperation[]
+        {
+            new ConcordantOperation.RootDeclare("t", RootKind.Text)
+            {
+                Id = new OpId(remote, 2),
+                Lamport = 1,
+            },
+        }));
+
+        Assert.Equal(ApplyStatus.Rejected, rejected.Status);
+        Assert.Equal(ApplyRejectReason.QuotaExceeded, rejected.Reason);
+        Assert.Equal(0, doc.PendingOperationCount);
+        Assert.Equal(before, doc.VisibleFingerprint());
+    }
+
+    [Fact]
+    public void Deferred_historical_sessions_cannot_stick_pending()
+    {
+        using var doc = new ConcordantDocument(new ConcordantDocumentOptions
+        {
+            WriterSession = SessionId.FromSeed(1),
+            MaxHistoricalSessions = 1,
+            MaxClockGap = 100,
+        });
+
+        SessionId first = SessionId.FromSeed(41);
+        Assert.Equal(
+            ApplyStatus.Integrated,
+            doc.Apply(new OperationBatch(new ConcordantOperation[]
+            {
+                new ConcordantOperation.RootDeclare("a", RootKind.Text)
+                {
+                    Id = new OpId(first, 1),
+                    Lamport = 1,
+                },
+            })).Status);
+
+        string before = doc.VisibleFingerprint();
+        SessionId second = SessionId.FromSeed(42);
+        ApplyResult rejected = doc.Apply(new OperationBatch(new ConcordantOperation[]
+        {
+            new ConcordantOperation.RootDeclare("b", RootKind.Text)
+            {
+                Id = new OpId(second, 2),
+                Lamport = 1,
+            },
+        }));
+
+        Assert.Equal(ApplyStatus.Rejected, rejected.Status);
+        Assert.Equal(ApplyRejectReason.QuotaExceeded, rejected.Reason);
+        Assert.Equal(0, doc.PendingOperationCount);
+        Assert.Equal(before, doc.VisibleFingerprint());
+    }
+
+    [Fact]
     public void Session_churn_exhausts_historical_session_cap()
     {
         using var doc = new ConcordantDocument(new ConcordantDocumentOptions
